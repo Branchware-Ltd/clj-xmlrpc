@@ -43,8 +43,11 @@
            [org.apache.xmlrpc.client
             XmlRpcClient
             XmlRpcClientConfigImpl
-            XmlRpcSunHttpTransportFactory
             AsyncCallback]
+           [org.apache.xmlrpc.common TypeFactoryImpl]
+           [org.apache.xmlrpc.parser
+            NullParser I1Parser I2Parser I8Parser
+            FloatParser BigDecimalParser]
            [java.net URL]
            [java.util.concurrent CompletableFuture]))
 
@@ -84,6 +87,31 @@
   (apply-config! (XmlRpcClientConfigImpl.) opts))
 
 ;; ---------------------------------------------------------------------------
+;; Type factory for Python/non-namespaced extension compatibility
+;; ---------------------------------------------------------------------------
+
+(defn- python-compat-type-factory
+  "Creates a TypeFactory that handles non-namespaced extension types.
+
+   Apache XML-RPC only handles extension types (nil, i1, i2, i8, float,
+   bigdecimal) when they're in the extensions namespace (ex:nil, etc.).
+   Many implementations (Python's xmlrpc, PHP, etc.) send these
+   without a namespace. This factory handles both cases."
+  [controller]
+  (proxy [TypeFactoryImpl] [controller]
+    (getParser [pConfig pContext pURI pLocalName]
+      (if (= "" pURI)
+        (case pLocalName
+          "nil"        (NullParser.)
+          "i1"         (I1Parser.)
+          "i2"         (I2Parser.)
+          "i8"         (I8Parser.)
+          "float"      (FloatParser.)
+          "bigdecimal" (BigDecimalParser.)
+          (proxy-super getParser pConfig pContext pURI pLocalName))
+        (proxy-super getParser pConfig pContext pURI pLocalName)))))
+
+;; ---------------------------------------------------------------------------
 ;; Client construction
 ;; ---------------------------------------------------------------------------
 
@@ -101,6 +129,10 @@
     :gzip-requesting?         request gzip from server (default false)
     :extensions?              enable Apache XML-RPC extensions — i8,
                               nil, serializable, etc. (default false)
+    :python-compat?           handle non-namespaced extension types
+                              (nil, i1, i2, i8, float, bigdecimal) for
+                              compatibility with Python, PHP, etc.
+                              Implies :extensions? true. (default false)
     :encoding                 character encoding (default UTF-8)
     :user-agent               custom User-Agent header
 
@@ -108,11 +140,15 @@
   ([url]
    (client url {}))
   ([url opts]
-   (let [full-opts (assoc opts :url url)
+   (let [;; python-compat? implies extensions?
+         opts      (cond-> opts
+                     (:python-compat? opts) (assoc :extensions? true))
+         full-opts (assoc opts :url url)
          config    (make-config full-opts)
          raw       (XmlRpcClient.)]
      (.setConfig raw config)
-     (.setTransportFactory raw (XmlRpcSunHttpTransportFactory. raw))
+     (when (:python-compat? opts)
+       (.setTypeFactory raw (python-compat-type-factory raw)))
      {::raw-client raw
       ::config     config
       ::opts       full-opts})))
@@ -131,9 +167,10 @@
     :method — the method name
     :args   — the original arguments"
   [client method & args]
-  (let [^XmlRpcClient c (::raw-client client)]
+  (let [^XmlRpcClient c (::raw-client client)
+        config (::config client)]
     (try
-      (t/->clj (.execute c ^String method ^objects (t/coerce-params args)))
+      (t/->clj (.execute c config ^String method ^objects (t/coerce-params args)))
       (catch XmlRpcException e
         (throw (ex-info (str "XML-RPC fault: " (.getMessage e))
                         {:type   :xmlrpc/fault
@@ -187,8 +224,10 @@
         (.exceptionally (fn [e] :fallback)))"
   [client method & args]
   (let [^XmlRpcClient c (::raw-client client)
+        config (::config client)
         cf (CompletableFuture.)]
     (.executeAsync c
+      config
       ^String method
       ^objects (t/coerce-params args)
       (reify AsyncCallback
