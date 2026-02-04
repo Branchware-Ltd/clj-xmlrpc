@@ -1,8 +1,8 @@
 {:paths ["src"]
 
  :deps
- {org.apache.xmlrpc/xmlrpc-client {:mvn/version "3.1.3"}
-  org.apache.xmlrpc/xmlrpc-server {:mvn/version "3.1.3"}}
+ {com.evolvedbinary.thirdparty.org.apache.xmlrpc/xmlrpc-client {:mvn/version "6.1.0"}
+  com.evolvedbinary.thirdparty.org.apache.xmlrpc/xmlrpc-server {:mvn/version "6.1.0"}}
 
  :aliases
  {:dev
